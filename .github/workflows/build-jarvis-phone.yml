@@ -1,7 +1,7 @@
 name: Build Jarvis Phone APK
 on:
   push:
-    branches: [jarvis-phone-build, jarvis-phone-safe-install]
+    branches: [jarvis-phone-build, jarvis-phone-safe-install, jarvis-phone-voice-v2]
   workflow_dispatch:
 jobs:
   build:
