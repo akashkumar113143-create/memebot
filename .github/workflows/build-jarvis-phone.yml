@@ -1,4 +1,4 @@
-name: Build Jarvis Phone APK
+name: Build Jarvis Phone Voice V2 APK
 on:
   push:
     branches: [jarvis-phone-build, jarvis-phone-safe-install, jarvis-phone-voice-v2]
