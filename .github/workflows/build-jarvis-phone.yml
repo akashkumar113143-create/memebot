@@ -1,7 +1,7 @@
-name: Build Jarvis Phone APK
+name: Build Jarvis Phone Voice V2 APK
 on:
   push:
-    branches: [jarvis-phone-build]
+    branches: [jarvis-phone-build, jarvis-phone-safe-install, jarvis-phone-voice-v2]
   workflow_dispatch:
 jobs:
   build:
@@ -19,6 +19,6 @@ jobs:
         run: gradle -p jarvis-phone assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4
         with:
-          name: JarvisPhoneV1-APK
+          name: JarvisPhoneVoiceV2-APK
           path: jarvis-phone/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
