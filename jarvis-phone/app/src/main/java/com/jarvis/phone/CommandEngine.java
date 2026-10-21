@@ -1,9 +1,11 @@
 package com.jarvis.phone;
 
+import android.app.Activity;
 import android.content.*;
 import android.content.pm.*;
 import android.media.AudioManager;
 import android.net.Uri;
+import android.os.Build;
 import android.provider.Settings;
 import android.view.KeyEvent;
 import java.util.*;
@@ -26,49 +28,43 @@ public class CommandEngine {
         l = l.replaceFirst("(?i)^" + Pattern.quote(n) + "[ ,:-]*", "").trim();
 
         if (isCloseCommand(l)) {
-            goHome();
-            r.say("ठीक है, app से बाहर आ गया।");
+            if (goHome()) r.say("ठीक है, Home screen पर आ गया।");
+            else r.say("Background App Control permission Allow करो, तभी दूसरे app से बाहर आ पाऊँगा।");
             return;
         }
 
         if (l.contains("youtube") || l.contains("यूट्यूब")) {
-            launch("com.google.android.youtube", "https://www.youtube.com");
-            r.say("YouTube खोल रहा हूँ।");
+            r.say(launch("com.google.android.youtube", "https://www.youtube.com") ? "YouTube खोल रहा हूँ।" : backgroundPermissionReply());
             return;
         }
         if (l.contains("whatsapp") || l.contains("व्हाट्सएप") || l.contains("वाट्सएप")) {
-            launch("com.whatsapp", "https://wa.me/");
-            r.say("WhatsApp खोल रहा हूँ।");
+            r.say(launch("com.whatsapp", "https://wa.me/") ? "WhatsApp खोल रहा हूँ।" : backgroundPermissionReply());
             return;
         }
         if (l.contains("instagram") || l.contains("इंस्टाग्राम")) {
-            launch("com.instagram.android", "https://www.instagram.com");
-            r.say("Instagram खोल रहा हूँ।");
+            r.say(launch("com.instagram.android", "https://www.instagram.com") ? "Instagram खोल रहा हूँ।" : backgroundPermissionReply());
             return;
         }
         if (l.contains("tradingview") || l.contains("trading view") || l.contains("ट्रेडिंगव्यू") || l.contains("ट्रेडिंग व्यू")) {
             if (launchInstalledByName("TradingView")) r.say("TradingView खोल रहा हूँ।");
-            else r.say("TradingView app नहीं मिला।");
+            else r.say(canLaunchFromHere() ? "TradingView app नहीं मिला।" : backgroundPermissionReply());
             return;
         }
         if (l.contains("telegram") || l.contains("टेलीग्राम")) {
             if (launchInstalledByName("Telegram")) r.say("Telegram खोल रहा हूँ।");
-            else r.say("Telegram app नहीं मिला।");
+            else r.say(canLaunchFromHere() ? "Telegram app नहीं मिला।" : backgroundPermissionReply());
             return;
         }
         if (l.contains("mt5") || l.contains("metatrader")) {
-            launch("net.metaquotes.metatrader5", "https://www.metatrader5.com");
-            r.say("MT5 खोल रहा हूँ।");
+            r.say(launch("net.metaquotes.metatrader5", "https://www.metatrader5.com") ? "MT5 खोल रहा हूँ।" : backgroundPermissionReply());
             return;
         }
         if (l.contains("phonepe") || l.contains("फोनपे") || l.contains("फोन पे")) {
-            launch("com.phonepe.app", "https://www.phonepe.com");
-            r.say("PhonePe खोल रहा हूँ।");
+            r.say(launch("com.phonepe.app", "https://www.phonepe.com") ? "PhonePe खोल रहा हूँ।" : backgroundPermissionReply());
             return;
         }
         if (l.contains("paytm") || l.contains("पेटीएम")) {
-            launch("net.one97.paytm", "https://paytm.com");
-            r.say("Paytm खोल रहा हूँ।");
+            r.say(launch("net.one97.paytm", "https://paytm.com") ? "Paytm खोल रहा हूँ।" : backgroundPermissionReply());
             return;
         }
 
@@ -84,38 +80,15 @@ public class CommandEngine {
             return;
         }
         if (l.contains("bluetooth") || l.contains("ब्लूटूथ")) {
-            open(Settings.ACTION_BLUETOOTH_SETTINGS);
-            r.say("Bluetooth settings खोल दी।");
+            r.say(open(Settings.ACTION_BLUETOOTH_SETTINGS) ? "Bluetooth settings खोल दी।" : backgroundPermissionReply());
             return;
         }
         if (l.contains("wifi") || l.contains("wi-fi") || l.contains("वाईफाई")) {
-            open(Settings.ACTION_WIFI_SETTINGS);
-            r.say("Wi-Fi settings खोल दी।");
+            r.say(open(Settings.ACTION_WIFI_SETTINGS) ? "Wi-Fi settings खोल दी।" : backgroundPermissionReply());
             return;
         }
         if (l.equals("home") || l.contains("होम जाओ")) {
-            goHome();
-            r.say("Home।");
-            return;
-        }
-        if (l.equals("back") || l.contains("पीछे जाओ")) {
-            JarvisAccessibilityService s = JarvisAccessibilityService.get();
-            if (s != null) s.performGlobalAction(1);
-            r.say("Back।");
-            return;
-        }
-        if (l.startsWith("tap ") || l.startsWith("दबाओ ")) {
-            String t = q.substring(q.indexOf(' ') + 1);
-            JarvisAccessibilityService s = JarvisAccessibilityService.get();
-            r.say(s != null && s.tapText(t) ? "दबा दिया।" : "वो text नहीं मिला।");
-            return;
-        }
-        if (l.contains("notification") || l.contains("नोटिफिकेशन")) {
-            r.say(v.get("latest_notification", "कोई notification capture नहीं हुई।"));
-            return;
-        }
-        if (l.contains("screen पर क्या") || l.contains("स्क्रीन पर क्या")) {
-            r.say(v.get("latest_screen_text", "Screen text उपलब्ध नहीं।"));
+            r.say(goHome() ? "Home।" : backgroundPermissionReply());
             return;
         }
         if (l.contains("गाना चल") || l.equals("play")) {
@@ -134,10 +107,18 @@ public class CommandEngine {
                 r.say("Number बोलो।");
                 return;
             }
+            if (!canLaunchFromHere()) {
+                r.say(backgroundPermissionReply());
+                return;
+            }
             Intent i = new Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + x));
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            c.startActivity(i);
-            r.say("Dialer खोल दिया।");
+            try {
+                c.startActivity(i);
+                r.say("Dialer खोल दिया।");
+            } catch (Exception e) {
+                r.say("Dialer नहीं खुल पाया।");
+            }
             return;
         }
 
@@ -148,6 +129,16 @@ public class CommandEngine {
         }
 
         r.say("ये command अभी समझ नहीं पाया।");
+    }
+
+    String backgroundPermissionReply() {
+        return "Background App Control permission चाहिए। Jarvis app में जाकर permission Allow करो।";
+    }
+
+    boolean canLaunchFromHere() {
+        if (c instanceof Activity) return true;
+        if (Build.VERSION.SDK_INT < 23) return true;
+        return Settings.canDrawOverlays(c);
     }
 
     boolean isCloseCommand(String l) {
@@ -166,9 +157,10 @@ public class CommandEngine {
     }
 
     boolean launchInstalledByName(String name) {
+        if (!canLaunchFromHere()) return false;
         Intent i = findInstalledApp(name);
         if (i == null) return false;
-        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
         try {
             c.startActivity(i);
             return true;
@@ -188,7 +180,8 @@ public class CommandEngine {
         ResolveInfo best = null;
         int bestScore = -1;
         for (ResolveInfo ri : apps) {
-            String label = ri.loadLabel(pm) == null ? "" : ri.loadLabel(pm).toString();
+            CharSequence cs = ri.loadLabel(pm);
+            String label = cs == null ? "" : cs.toString();
             String pkg = ri.activityInfo.packageName;
             String nl = normalize(label);
             String np = normalize(pkg);
@@ -213,24 +206,42 @@ public class CommandEngine {
         return s == null ? "" : s.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9\\p{L}]", "");
     }
 
-    void launch(String pkg, String fallback) {
+    boolean launch(String pkg, String fallback) {
+        if (!canLaunchFromHere()) return false;
         Intent i = c.getPackageManager().getLaunchIntentForPackage(pkg);
         if (i == null) i = new Intent(Intent.ACTION_VIEW, Uri.parse(fallback));
-        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        try { c.startActivity(i); } catch (Exception ignored) {}
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+        try {
+            c.startActivity(i);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
-    void open(String action) {
+    boolean open(String action) {
+        if (!canLaunchFromHere()) return false;
         Intent i = new Intent(action);
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        c.startActivity(i);
+        try {
+            c.startActivity(i);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
-    void goHome() {
+    boolean goHome() {
+        if (!canLaunchFromHere()) return false;
         Intent i = new Intent(Intent.ACTION_MAIN);
         i.addCategory(Intent.CATEGORY_HOME);
-        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        c.startActivity(i);
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+        try {
+            c.startActivity(i);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     void media(int k) {
