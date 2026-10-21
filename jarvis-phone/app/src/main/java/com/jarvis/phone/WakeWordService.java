@@ -5,6 +5,7 @@ import android.content.*;
 import android.os.*;
 import android.speech.*;
 import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
 import java.util.*;
 
 public class WakeWordService extends Service implements RecognitionListener {
@@ -15,6 +16,7 @@ public class WakeWordService extends Service implements RecognitionListener {
     final Handler handler = new Handler(Looper.getMainLooper());
     boolean active = true;
     boolean listening = false;
+    boolean speaking = false;
     boolean waitingForCommand = false;
     int consecutiveErrors = 0;
     static final String CH = "jarvis_listener";
@@ -29,27 +31,35 @@ public class WakeWordService extends Service implements RecognitionListener {
         startForeground(21, new Notification.Builder(this, CH)
                 .setSmallIcon(android.R.drawable.ic_btn_speak_now)
                 .setContentTitle("Jarvis listening")
-                .setContentText("Say Jarvis, then your command")
+                .setContentText("Background voice control is on")
                 .build());
 
         tts = new TextToSpeech(this, s -> {
-            if (s == TextToSpeech.SUCCESS) tts.setLanguage(new Locale("hi", "IN"));
+            if (s == TextToSpeech.SUCCESS) {
+                tts.setLanguage(new Locale("hi", "IN"));
+                tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                    public void onStart(String id) { speaking = true; }
+                    public void onDone(String id) {
+                        speaking = false;
+                        scheduleListen(700);
+                    }
+                    public void onError(String id) {
+                        speaking = false;
+                        scheduleListen(700);
+                    }
+                });
+            }
         });
+
         prepareRecognizer();
-        scheduleListen(500);
+        scheduleListen(600);
     }
 
     void prepareRecognizer() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            stopSelf();
-            return;
-        }
+        if (!active || !SpeechRecognizer.isRecognitionAvailable(this)) return;
         destroyRecognizer();
-        // Use the phone's default recognition service. Forcing the on-device
-        // recognizer can fail immediately when hi-IN is not installed/supported.
         sr = SpeechRecognizer.createSpeechRecognizer(this);
         sr.setRecognitionListener(this);
-
         ri = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         ri.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN");
         ri.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
@@ -58,13 +68,13 @@ public class WakeWordService extends Service implements RecognitionListener {
     }
 
     void scheduleListen(long delayMs) {
-        if (!active) return;
+        if (!active || speaking) return;
         handler.removeCallbacksAndMessages(null);
         handler.postDelayed(this::startListening, delayMs);
     }
 
     void startListening() {
-        if (!active || listening) return;
+        if (!active || speaking || listening) return;
         try {
             if (sr == null) prepareRecognizer();
             if (sr == null) return;
@@ -73,19 +83,26 @@ public class WakeWordService extends Service implements RecognitionListener {
         } catch (Exception e) {
             listening = false;
             prepareRecognizer();
-            scheduleListen(1200);
+            scheduleListen(1800);
         }
+    }
+
+    boolean looksLikeCommand(String s) {
+        String x = s.toLowerCase(Locale.ROOT);
+        String[] words = {"खोल", "open", "बंद", "close", "चालू", "start", "play", "pause", "रोक", "call", "कॉल", "home", "होम", "back", "पीछे", "tap", "दबाओ", "notification", "नोटिफिकेशन", "screen", "स्क्रीन", "wifi", "bluetooth", "टॉर्च", "torch"};
+        for (String w : words) if (x.contains(w)) return true;
+        return false;
     }
 
     void handle(ArrayList<String> results) {
         if (results == null || results.isEmpty()) {
-            scheduleListen(500);
+            scheduleListen(1200);
             return;
         }
 
         String heard = results.get(0).trim();
         if (heard.isEmpty()) {
-            scheduleListen(500);
+            scheduleListen(1200);
             return;
         }
 
@@ -100,34 +117,50 @@ public class WakeWordService extends Service implements RecognitionListener {
             return;
         }
 
-        if (wakeIndex < 0) {
-            scheduleListen(350);
+        if (wakeIndex >= 0) {
+            String command = heard.substring(wakeIndex + wakeName.length()).trim();
+            if (command.isEmpty()) {
+                waitingForCommand = true;
+                sayAndResume("हाँ, बोलो।");
+            } else {
+                executeCommand(command);
+            }
             return;
         }
 
-        String command = heard.substring(wakeIndex + wakeName.length()).trim();
-        if (command.isEmpty()) {
-            waitingForCommand = true;
-            say("हाँ, बोलो।");
-            scheduleListen(1000);
+        // Once the user explicitly enabled listening, allow clear command-like
+        // phrases even without saying the wake word every time.
+        if (looksLikeCommand(heard)) {
+            executeCommand(heard);
         } else {
-            executeCommand(command);
+            scheduleListen(900);
         }
     }
 
     void executeCommand(String command) {
-        new CommandEngine(this).execute(command, reply -> {
-            say(reply);
-            scheduleListen(1600);
-        });
+        try {
+            if (sr != null) sr.cancel();
+        } catch (Exception ignored) {}
+        listening = false;
+        new CommandEngine(this).execute(command, this::sayAndResume);
     }
 
-    void say(String text) {
-        if (tts != null) tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "jarvis");
+    void sayAndResume(String text) {
+        if (tts == null) {
+            scheduleListen(700);
+            return;
+        }
+        speaking = true;
+        try {
+            if (sr != null) sr.cancel();
+        } catch (Exception ignored) {}
+        listening = false;
+        tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "jarvis_reply");
     }
 
     public int onStartCommand(Intent i, int flags, int startId) {
-        if (active && !listening) scheduleListen(300);
+        active = true;
+        if (!listening && !speaking) scheduleListen(400);
         return START_STICKY;
     }
 
@@ -145,8 +178,7 @@ public class WakeWordService extends Service implements RecognitionListener {
 
     public void onError(int error) {
         listening = false;
-        if (!active) return;
-
+        if (!active || speaking) return;
         if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
             stopSelf();
             return;
@@ -160,8 +192,11 @@ public class WakeWordService extends Service implements RecognitionListener {
             consecutiveErrors = 0;
         }
 
-        long delay = (error == SpeechRecognizer.ERROR_NO_MATCH ||
-                error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) ? 700 : 1400;
+        long delay;
+        if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
+            delay = 2200;
+        else
+            delay = 3000;
         scheduleListen(delay);
     }
 
