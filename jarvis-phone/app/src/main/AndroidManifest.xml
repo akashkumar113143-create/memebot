@@ -11,6 +11,11 @@
         <intent>
             <action android:name="android.speech.RecognitionService" />
         </intent>
+        <!-- Let Jarvis resolve apps that have launcher icons, without requesting broad QUERY_ALL_PACKAGES access. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
         <package android:name="com.phonepe.app" />
         <package android:name="net.one97.paytm" />
         <package android:name="com.google.android.youtube" />
