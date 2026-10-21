@@ -25,19 +25,11 @@ public class CommandEngine {
     public void execute(String q, Reply r) {
         if (q == null || q.trim().isEmpty()) return;
         String cleaned = stripWake(q.trim());
-        String l = cleaned.toLowerCase(Locale.ROOT);
-
-        if (isYoutubeWorkflow(l)) {
-            runYoutubeWorkflow(cleaned, l, r);
-            return;
-        }
-
         List<String> steps = splitMulti(cleaned);
         if (steps.size() > 1) {
             runSequence(steps, r);
             return;
         }
-
         executeSingle(cleaned, r);
     }
 
@@ -50,7 +42,7 @@ public class CommandEngine {
         String s = q.replace(" और फिर ", " || ")
                 .replace(" फिर ", " || ")
                 .replaceAll("(?i)\\s+then\\s+", " || ")
-                .replace(" और ", " || ");
+                .replace(" उसके बाद ", " || ");
         String[] raw = s.split("\\|\\|");
         ArrayList<String> out = new ArrayList<>();
         for (String x : raw) if (!x.trim().isEmpty()) out.add(x.trim());
@@ -58,172 +50,30 @@ public class CommandEngine {
     }
 
     void runSequence(List<String> steps, Reply r) {
-        JarvisAccessibilityService svc = JarvisAccessibilityService.get();
-        if (svc == null) {
-            r.say("Multi-work के लिए Jarvis की Screen Control permission ON करो।");
-            return;
-        }
         long delay = 0;
         for (int i = 0; i < steps.size(); i++) {
             final String step = steps.get(i);
             final boolean last = i == steps.size() - 1;
             handler.postDelayed(() -> executeSingle(step, last ? r : s -> {}), delay);
-            delay += 2200;
+            delay += 1800;
         }
-        if (steps.size() > 1) r.say("ठीक है, सारे काम एक-एक करके कर रहा हूँ।");
-    }
-
-    boolean isYoutubeWorkflow(String l) {
-        if (!(l.contains("youtube") || l.contains("यूट्यूब"))) return false;
-        return l.contains("song") || l.contains("गाना") || l.contains("play") ||
-                l.contains("बजाओ") || l.contains("लगाओ") || l.contains("search") ||
-                l.contains("खोज") || l.contains("like") || l.contains("लाइक") ||
-                l.contains("watch later") || l.contains("watch list") || l.contains("playlist") || l.contains("सेव");
-    }
-
-    void runYoutubeWorkflow(String q, String l, Reply r) {
-        if (!canLaunchFromHere()) {
-            r.say(backgroundPermissionReply());
-            return;
-        }
-
-        String query = extractYoutubeQuery(q);
-        boolean wantsLike = l.contains("like") || l.contains("लाइक") || l.contains("पसंद");
-        boolean wantsSave = l.contains("watch later") || l.contains("watch list") || l.contains("playlist") || l.contains("सेव") || l.contains("save");
-
-        if (query.isEmpty()) {
-            launch("com.google.android.youtube", "https://www.youtube.com");
-            r.say("YouTube खोल रहा हूँ।");
-            return;
-        }
-
-        boolean opened = openYoutubeSearch(query);
-        if (!opened) {
-            r.say("YouTube search नहीं खुल पाया।");
-            return;
-        }
-
-        JarvisAccessibilityService svc = JarvisAccessibilityService.get();
-        if (svc == null) {
-            r.say("YouTube खुल गया। Search result play, Like और Save के लिए Screen Control permission ON करो।");
-            return;
-        }
-
-        handler.postDelayed(() -> svc.tapBestMatch(query), 2800);
-
-        if (wantsLike) {
-            handler.postDelayed(() -> svc.tapAny("Like", "like this video", "लाइक", "पसंद है"), 6500);
-        }
-        if (wantsSave) {
-            handler.postDelayed(() -> {
-                if (svc.tapAny("Save", "Save to playlist", "सेव")) {
-                    handler.postDelayed(() -> svc.tapAny("Watch later", "बाद में देखें", "Watch Later"), 1200);
-                }
-            }, wantsLike ? 8200 : 6500);
-        }
-
-        r.say("YouTube पर " + query + " ढूँढकर चला रहा हूँ" + (wantsLike ? ", Like भी करूँगा" : "") + (wantsSave ? ", और Watch Later में Save करूँगा" : "") + "।");
-    }
-
-    String extractYoutubeQuery(String q) {
-        String s = stripWake(q);
-        int cut = indexOfAny(s.toLowerCase(Locale.ROOT), " और ", " फिर ", " then ", ", फिर");
-        if (cut > 0) s = s.substring(0, cut);
-        s = s.replaceAll("(?i)youtube|यूट्यूब", " ");
-        s = s.replaceAll("(?i)\\b(open|play|search|start)\\b", " ");
-        s = s.replace("खोलो", " ").replace("खोल", " ").replace("चालू करो", " ");
-        s = s.replace("गाना बजाओ", " ").replace("गाना चलाओ", " ").replace("गाना लगाओ", " ");
-        s = s.replace("बजाओ", " ").replace("चलाओ", " ").replace("लगाओ", " ").replace("खोजो", " ");
-        s = s.replaceAll("\\s+", " ").trim();
-        return s;
-    }
-
-    int indexOfAny(String s, String... needles) {
-        int best = -1;
-        for (String n : needles) {
-            int i = s.indexOf(n);
-            if (i >= 0 && (best < 0 || i < best)) best = i;
-        }
-        return best;
-    }
-
-    boolean openYoutubeSearch(String query) {
-        Intent i = new Intent(Intent.ACTION_VIEW,
-                Uri.parse("https://www.youtube.com/results?search_query=" + Uri.encode(query)));
-        i.setPackage("com.google.android.youtube");
-        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-        try {
-            c.startActivity(i);
-            return true;
-        } catch (Exception e) {
-            try {
-                Intent web = new Intent(Intent.ACTION_VIEW,
-                        Uri.parse("https://www.youtube.com/results?search_query=" + Uri.encode(query)));
-                web.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                c.startActivity(web);
-                return true;
-            } catch (Exception ignored) {
-                return false;
-            }
-        }
+        r.say("ठीक है, काम एक-एक करके कर रहा हूँ।");
     }
 
     void executeSingle(String q, Reply r) {
         String l = stripWake(q).toLowerCase(Locale.ROOT).trim();
-        JarvisAccessibilityService svc = JarvisAccessibilityService.get();
-
-        if (l.startsWith("type ") || l.startsWith("लिखो ") || l.startsWith("टाइप ")) {
-            String text = q.substring(q.indexOf(' ') + 1).trim();
-            if (svc == null) r.say("Type करने के लिए Screen Control permission ON करो।");
-            else r.say(svc.typeText(text) ? "लिख दिया।" : "यहाँ typing box नहीं मिला।");
-            return;
-        }
-
-        if (l.startsWith("search ") || l.startsWith("खोजो ") || l.startsWith("सर्च ")) {
-            String text = q.substring(q.indexOf(' ') + 1).trim();
-            if (svc == null) {
-                r.say("Search के लिए Screen Control permission ON करो।");
-                return;
-            }
-            boolean typed = svc.typeText(text);
-            if (typed) {
-                handler.postDelayed(() -> {
-                    if (!svc.pressEnter()) svc.tapAny("Search", "खोजें", "Go");
-                }, 350);
-                r.say("Search कर रहा हूँ।");
-            } else r.say("Search box नहीं मिला।");
-            return;
-        }
-
-        if (l.startsWith("tap ") || l.startsWith("दबाओ ") || l.startsWith("क्लिक ")) {
-            String text = q.substring(q.indexOf(' ') + 1).trim();
-            if (svc == null) r.say("Tap करने के लिए Screen Control permission ON करो।");
-            else r.say(svc.tapText(text) ? "दबा दिया।" : "वो button/text नहीं मिला।");
-            return;
-        }
-
-        if (isCloseCommand(l)) {
-            boolean ok = svc != null ? svc.home() : goHome();
-            r.say(ok ? "ठीक है, Home screen पर आ गया।" : "App से बाहर आने के लिए Screen Control permission ON करो।");
-            return;
-        }
-
-        if (l.equals("back") || l.contains("पीछे जाओ")) {
-            boolean ok = svc != null ? svc.back() : false;
-            r.say(ok ? "पीछे आ गया।" : "Back के लिए Screen Control permission ON करो।");
-            return;
-        }
-
-        if (l.equals("home") || l.contains("होम जाओ")) {
-            boolean ok = svc != null ? svc.home() : goHome();
-            r.say(ok ? "Home।" : backgroundPermissionReply());
-            return;
-        }
 
         if (l.contains("youtube") || l.contains("यूट्यूब")) {
-            r.say(launch("com.google.android.youtube", "https://www.youtube.com") ? "YouTube खोल रहा हूँ।" : backgroundPermissionReply());
+            String query = extractYoutubeQuery(q);
+            if (!query.isEmpty() && wantsYoutubeSearch(l)) {
+                boolean ok = openYoutubeSearch(query);
+                r.say(ok ? "YouTube पर " + query + " खोज रहा हूँ।" : "YouTube search नहीं खुल पाया।");
+            } else {
+                r.say(launch("com.google.android.youtube", "https://www.youtube.com") ? "YouTube खोल रहा हूँ।" : backgroundPermissionReply());
+            }
             return;
         }
+
         if (l.contains("whatsapp") || l.contains("व्हाट्सएप") || l.contains("वाट्सएप")) {
             r.say(launch("com.whatsapp", "https://wa.me/") ? "WhatsApp खोल रहा हूँ।" : backgroundPermissionReply());
             return;
@@ -242,7 +92,7 @@ public class CommandEngine {
             else r.say(canLaunchFromHere() ? "Telegram app नहीं मिला।" : backgroundPermissionReply());
             return;
         }
-        if (l.contains("mt5") || l.contains("metatrader")) {
+        if (l.contains("mt5") || l.contains("metatrader") || l.contains("मेटाट्रेडर")) {
             r.say(launch("net.metaquotes.metatrader5", "https://www.metatrader5.com") ? "MT5 खोल रहा हूँ।" : backgroundPermissionReply());
             return;
         }
@@ -252,6 +102,13 @@ public class CommandEngine {
         }
         if (l.contains("paytm") || l.contains("पेटीएम")) {
             r.say(launch("net.one97.paytm", "https://paytm.com") ? "Paytm खोल रहा हूँ।" : backgroundPermissionReply());
+            return;
+        }
+
+        if (l.startsWith("search ") || l.startsWith("सर्च ") || l.startsWith("खोजो ")) {
+            String text = q.substring(q.indexOf(' ') + 1).trim();
+            boolean ok = openWebSearch(text);
+            r.say(ok ? text + " search कर रहा हूँ।" : "Search नहीं खुल पाया।");
             return;
         }
 
@@ -274,16 +131,33 @@ public class CommandEngine {
             r.say(open(Settings.ACTION_WIFI_SETTINGS) ? "Wi-Fi settings खोल दी।" : backgroundPermissionReply());
             return;
         }
-        if (l.contains("गाना चल") || l.equals("play")) {
+
+        if (isCloseCommand(l) || l.equals("home") || l.contains("होम जाओ")) {
+            r.say(goHome() ? "Home screen पर आ गया।" : backgroundPermissionReply());
+            return;
+        }
+
+        if (l.contains("गाना चल") || l.equals("play") || l.contains("music play")) {
             media(KeyEvent.KEYCODE_MEDIA_PLAY);
             r.say("Play।");
             return;
         }
-        if (l.contains("गाना रोक") || l.equals("pause")) {
+        if (l.contains("गाना रोक") || l.equals("pause") || l.contains("music pause")) {
             media(KeyEvent.KEYCODE_MEDIA_PAUSE);
             r.say("Pause।");
             return;
         }
+        if (l.contains("next song") || l.contains("अगला गाना")) {
+            media(KeyEvent.KEYCODE_MEDIA_NEXT);
+            r.say("Next।");
+            return;
+        }
+        if (l.contains("previous song") || l.contains("पिछला गाना")) {
+            media(KeyEvent.KEYCODE_MEDIA_PREVIOUS);
+            r.say("Previous।");
+            return;
+        }
+
         if (l.startsWith("call ") || l.startsWith("कॉल ")) {
             String x = q.substring(q.indexOf(' ') + 1).replaceAll("[^0-9+]", "");
             if (x.isEmpty()) {
@@ -311,11 +185,76 @@ public class CommandEngine {
             return;
         }
 
+        if (l.contains("like") || l.contains("लाइक") || l.contains("watch later") || l.contains("watch list") || l.contains("टाइप") || l.contains("लिखो") || l.contains("tap") || l.contains("दबाओ")) {
+            r.say("ये काम दूसरे app के अंदर tap या type माँगता है। Safe build में Accessibility नहीं है।");
+            return;
+        }
+
         r.say("ये command अभी समझ नहीं पाया।");
     }
 
+    boolean wantsYoutubeSearch(String l) {
+        return l.contains("song") || l.contains("गाना") || l.contains("play") || l.contains("बजाओ") || l.contains("लगाओ") || l.contains("search") || l.contains("खोज");
+    }
+
+    String extractYoutubeQuery(String q) {
+        String s = stripWake(q);
+        s = s.replaceAll("(?i)youtube|यूट्यूब", " ");
+        s = s.replaceAll("(?i)\\b(open|play|search|start)\\b", " ");
+        s = s.replace("खोलो", " ").replace("खोल", " ").replace("चालू करो", " ");
+        s = s.replace("गाना बजाओ", " ").replace("गाना चलाओ", " ").replace("गाना लगाओ", " ");
+        s = s.replace("बजाओ", " ").replace("चलाओ", " ").replace("लगाओ", " ").replace("खोजो", " ");
+        int likeAt = indexOfAny(s.toLowerCase(Locale.ROOT), " like", " लाइक", " watch later", " watch list", " सेव", " save");
+        if (likeAt > 0) s = s.substring(0, likeAt);
+        return s.replaceAll("\\s+", " ").trim();
+    }
+
+    int indexOfAny(String s, String... needles) {
+        int best = -1;
+        for (String n : needles) {
+            int i = s.indexOf(n);
+            if (i >= 0 && (best < 0 || i < best)) best = i;
+        }
+        return best;
+    }
+
+    boolean openYoutubeSearch(String query) {
+        if (!canLaunchFromHere()) return false;
+        Intent i = new Intent(Intent.ACTION_VIEW,
+                Uri.parse("https://www.youtube.com/results?search_query=" + Uri.encode(query)));
+        i.setPackage("com.google.android.youtube");
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+        try {
+            c.startActivity(i);
+            return true;
+        } catch (Exception e) {
+            try {
+                Intent web = new Intent(Intent.ACTION_VIEW,
+                        Uri.parse("https://www.youtube.com/results?search_query=" + Uri.encode(query)));
+                web.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                c.startActivity(web);
+                return true;
+            } catch (Exception ignored) {
+                return false;
+            }
+        }
+    }
+
+    boolean openWebSearch(String query) {
+        if (!canLaunchFromHere()) return false;
+        try {
+            Intent i = new Intent(Intent.ACTION_VIEW,
+                    Uri.parse("https://www.google.com/search?q=" + Uri.encode(query)));
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            c.startActivity(i);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     String backgroundPermissionReply() {
-        return "Background App Control permission चाहिए। Jarvis app में permission Allow करो।";
+        return "Background App Control permission चाहिए। Jarvis app में जाकर Allow करो।";
     }
 
     boolean canLaunchFromHere() {
@@ -329,7 +268,7 @@ public class CommandEngine {
     }
 
     String extractAppName(String q) {
-        String s = q.trim();
+        String s = stripWake(q).trim();
         s = s.replaceFirst("(?i)^open\\s+", "");
         s = s.replaceFirst("(?i)^launch\\s+", "");
         s = s.replaceFirst("^खोलो\\s+", "");
@@ -359,7 +298,6 @@ public class CommandEngine {
         Intent probe = new Intent(Intent.ACTION_MAIN, null);
         probe.addCategory(Intent.CATEGORY_LAUNCHER);
         List<ResolveInfo> apps = pm.queryIntentActivities(probe, PackageManager.MATCH_ALL);
-
         ResolveInfo best = null;
         int bestScore = -1;
         for (ResolveInfo ri : apps) {
@@ -377,7 +315,6 @@ public class CommandEngine {
                 best = ri;
             }
         }
-
         if (best == null || bestScore < 0) return null;
         Intent out = new Intent(Intent.ACTION_MAIN);
         out.addCategory(Intent.CATEGORY_LAUNCHER);
@@ -415,6 +352,7 @@ public class CommandEngine {
     }
 
     boolean goHome() {
+        if (!canLaunchFromHere()) return false;
         Intent i = new Intent(Intent.ACTION_MAIN);
         i.addCategory(Intent.CATEGORY_HOME);
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
