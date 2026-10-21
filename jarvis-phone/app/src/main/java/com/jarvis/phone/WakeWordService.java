@@ -2,10 +2,16 @@ package com.jarvis.phone;
 
 import android.app.*;
 import android.content.*;
+import android.graphics.Color;
+import android.graphics.PixelFormat;
 import android.os.*;
+import android.provider.Settings;
 import android.speech.*;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
+import android.view.Gravity;
+import android.view.WindowManager;
+import android.widget.TextView;
 import java.util.*;
 
 public class WakeWordService extends Service implements RecognitionListener {
@@ -18,7 +24,11 @@ public class WakeWordService extends Service implements RecognitionListener {
     boolean listening = false;
     boolean speaking = false;
     boolean waitingForCommand = false;
+    boolean segmentedRequested = false;
     int consecutiveErrors = 0;
+    long ignoreResultsUntil = 0L;
+    WindowManager wm;
+    TextView bubble;
     static final String CH = "jarvis_listener";
 
     public void onCreate() {
@@ -34,6 +44,8 @@ public class WakeWordService extends Service implements RecognitionListener {
                 .setContentText("Background voice control is on")
                 .build());
 
+        showBubble();
+
         tts = new TextToSpeech(this, s -> {
             if (s == TextToSpeech.SUCCESS) {
                 tts.setLanguage(new Locale("hi", "IN"));
@@ -41,11 +53,13 @@ public class WakeWordService extends Service implements RecognitionListener {
                     public void onStart(String id) { speaking = true; }
                     public void onDone(String id) {
                         speaking = false;
-                        scheduleListen(700);
+                        ignoreResultsUntil = SystemClock.elapsedRealtime() + 1200;
+                        if (!listening) scheduleListen(1400);
                     }
                     public void onError(String id) {
                         speaking = false;
-                        scheduleListen(700);
+                        ignoreResultsUntil = SystemClock.elapsedRealtime() + 1200;
+                        if (!listening) scheduleListen(1400);
                     }
                 });
             }
@@ -53,6 +67,41 @@ public class WakeWordService extends Service implements RecognitionListener {
 
         prepareRecognizer();
         scheduleListen(600);
+    }
+
+    void showBubble() {
+        if (Build.VERSION.SDK_INT < 26 || !Settings.canDrawOverlays(this)) return;
+        try {
+            wm = (WindowManager)getSystemService(WINDOW_SERVICE);
+            bubble = new TextView(this);
+            bubble.setText("J");
+            bubble.setTextColor(Color.WHITE);
+            bubble.setTextSize(12f);
+            bubble.setGravity(Gravity.CENTER);
+            bubble.setBackgroundColor(0xAA222222);
+            int px = (int)(36f * getResources().getDisplayMetrics().density);
+            WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                    px, px,
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
+                            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE |
+                            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    PixelFormat.TRANSLUCENT);
+            lp.gravity = Gravity.TOP | Gravity.END;
+            lp.x = 10;
+            lp.y = 180;
+            wm.addView(bubble, lp);
+        } catch (Exception ignored) {
+            bubble = null;
+        }
+    }
+
+    void removeBubble() {
+        if (wm != null && bubble != null) {
+            try { wm.removeView(bubble); } catch (Exception ignored) {}
+        }
+        bubble = null;
+        wm = null;
     }
 
     void prepareRecognizer() {
@@ -65,10 +114,22 @@ public class WakeWordService extends Service implements RecognitionListener {
         ri.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
         ri.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false);
         ri.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
+
+        segmentedRequested = false;
+        if (Build.VERSION.SDK_INT >= 33) {
+            try {
+                ri.putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION,
+                        RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS);
+                ri.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 120000);
+                segmentedRequested = true;
+            } catch (Exception ignored) {
+                segmentedRequested = false;
+            }
+        }
     }
 
     void scheduleListen(long delayMs) {
-        if (!active || speaking) return;
+        if (!active || speaking || listening) return;
         handler.removeCallbacksAndMessages(null);
         handler.postDelayed(this::startListening, delayMs);
     }
@@ -83,7 +144,7 @@ public class WakeWordService extends Service implements RecognitionListener {
         } catch (Exception e) {
             listening = false;
             prepareRecognizer();
-            scheduleListen(1800);
+            scheduleListen(4000);
         }
     }
 
@@ -95,16 +156,11 @@ public class WakeWordService extends Service implements RecognitionListener {
     }
 
     void handle(ArrayList<String> results) {
-        if (results == null || results.isEmpty()) {
-            scheduleListen(1200);
-            return;
-        }
+        if (!active || speaking || SystemClock.elapsedRealtime() < ignoreResultsUntil) return;
+        if (results == null || results.isEmpty()) return;
 
         String heard = results.get(0).trim();
-        if (heard.isEmpty()) {
-            scheduleListen(1200);
-            return;
-        }
+        if (heard.isEmpty()) return;
 
         String wakeName = v.get("wake_name", "Jarvis");
         String lower = heard.toLowerCase(Locale.ROOT);
@@ -121,46 +177,33 @@ public class WakeWordService extends Service implements RecognitionListener {
             String command = heard.substring(wakeIndex + wakeName.length()).trim();
             if (command.isEmpty()) {
                 waitingForCommand = true;
-                sayAndResume("हाँ, बोलो।");
+                sayWithoutBreakingSession("हाँ, बोलो।");
             } else {
                 executeCommand(command);
             }
             return;
         }
 
-        // Once the user explicitly enabled listening, allow clear command-like
-        // phrases even without saying the wake word every time.
-        if (looksLikeCommand(heard)) {
-            executeCommand(heard);
-        } else {
-            scheduleListen(900);
-        }
+        if (looksLikeCommand(heard)) executeCommand(heard);
     }
 
     void executeCommand(String command) {
-        try {
-            if (sr != null) sr.cancel();
-        } catch (Exception ignored) {}
-        listening = false;
-        new CommandEngine(this).execute(command, this::sayAndResume);
+        new CommandEngine(this).execute(command, this::sayWithoutBreakingSession);
     }
 
-    void sayAndResume(String text) {
+    void sayWithoutBreakingSession(String text) {
         if (tts == null) {
-            scheduleListen(700);
+            if (!listening) scheduleListen(1400);
             return;
         }
         speaking = true;
-        try {
-            if (sr != null) sr.cancel();
-        } catch (Exception ignored) {}
-        listening = false;
         tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "jarvis_reply");
     }
 
     public int onStartCommand(Intent i, int flags, int startId) {
         active = true;
-        if (!listening && !speaking) scheduleListen(400);
+        if (bubble == null) showBubble();
+        if (!listening && !speaking) scheduleListen(500);
         return START_STICKY;
     }
 
@@ -170,10 +213,22 @@ public class WakeWordService extends Service implements RecognitionListener {
     public void onBufferReceived(byte[] b) {}
     public void onEndOfSpeech() {}
 
+    public void onSegmentResults(Bundle b) {
+        if (Build.VERSION.SDK_INT < 33) return;
+        handle(b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION));
+    }
+
+    public void onEndOfSegmentedSession() {
+        if (Build.VERSION.SDK_INT < 33) return;
+        listening = false;
+        if (!speaking) scheduleListen(2500);
+    }
+
     public void onResults(Bundle b) {
         listening = false;
         consecutiveErrors = 0;
         handle(b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION));
+        if (!speaking) scheduleListen(2200);
     }
 
     public void onError(int error) {
@@ -194,9 +249,9 @@ public class WakeWordService extends Service implements RecognitionListener {
 
         long delay;
         if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
-            delay = 2200;
+            delay = 7000;
         else
-            delay = 3000;
+            delay = 5000;
         scheduleListen(delay);
     }
 
@@ -209,12 +264,14 @@ public class WakeWordService extends Service implements RecognitionListener {
             try { sr.destroy(); } catch (Exception ignored) {}
             sr = null;
         }
+        listening = false;
     }
 
     public void onDestroy() {
         active = false;
         handler.removeCallbacksAndMessages(null);
         destroyRecognizer();
+        removeBubble();
         if (tts != null) tts.shutdown();
         super.onDestroy();
     }
