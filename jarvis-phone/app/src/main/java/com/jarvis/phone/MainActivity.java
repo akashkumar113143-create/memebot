@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.*;
 import android.content.*;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.*;
 import android.provider.Settings;
 import android.speech.RecognizerIntent;
@@ -16,6 +17,7 @@ public class MainActivity extends Activity {
     EditText wake, cmd;
     TextView status;
     TextToSpeech tts;
+    boolean waitingOverlayPermission = false;
     static final int SPEECH = 90;
 
     public void onCreate(Bundle b) {
@@ -30,7 +32,7 @@ public class MainActivity extends Activity {
         x.setPadding(28, 28, 28, 28);
 
         TextView title = new TextView(this);
-        title.setText("Jarvis Phone v2.0.4\nBACKGROUND VOICE TEST BUILD");
+        title.setText("Jarvis Phone v2.0.5\nPERSISTENT BACKGROUND VOICE BUILD");
         title.setTextSize(23);
         x.addView(title);
 
@@ -46,6 +48,7 @@ public class MainActivity extends Activity {
 
         add(x, "START LISTENING", this::startBackgroundVoice);
         add(x, "STOP LISTENING", this::stopBackgroundVoice);
+        add(x, "BACKGROUND APP CONTROL PERMISSION", this::requestOverlayPermission);
         add(x, "SPEAK ONCE (Google fallback)", this::speakOnce);
 
         cmd = new EditText(this);
@@ -53,7 +56,6 @@ public class MainActivity extends Activity {
         x.addView(cmd);
         add(x, "RUN COMMAND", () -> new CommandEngine(this).execute(cmd.getText().toString(), this::say));
 
-        add(x, "SCREEN CONTROL PERMISSION", () -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
         add(x, "NOTIFICATION ACCESS", () -> startActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")));
         add(x, "CLEAR LOCAL MEMORY", () -> {
             vault.clear();
@@ -62,13 +64,13 @@ public class MainActivity extends Activity {
         });
 
         status = new TextView(this);
-        status.setText("Ready. START LISTENING एक बार दबाओ; फिर app minimize होने पर भी Jarvis सुनने की कोशिश करेगा।");
+        status.setText("Ready. पहली बार START LISTENING दबाओ और Background App Control permission Allow करो।");
         x.addView(status);
 
         ScrollView s = new ScrollView(this);
         s.addView(x);
         setContentView(s);
-        request();
+        requestRuntimePermissions();
     }
 
     void add(LinearLayout x, String n, Runnable r) {
@@ -78,7 +80,7 @@ public class MainActivity extends Activity {
         x.addView(b);
     }
 
-    void request() {
+    void requestRuntimePermissions() {
         ArrayList<String> p = new ArrayList<>();
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED)
             p.add(Manifest.permission.RECORD_AUDIO);
@@ -89,19 +91,44 @@ public class MainActivity extends Activity {
         if (!p.isEmpty()) requestPermissions(p.toArray(new String[0]), 33);
     }
 
+    void requestOverlayPermission() {
+        if (Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(this)) {
+            status.setText("Background App Control permission already ON.");
+            return;
+        }
+        waitingOverlayPermission = true;
+        Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:" + getPackageName()));
+        startActivity(i);
+        status.setText("Display over other apps में Jarvis Phone को Allow करो।");
+    }
+
     void startBackgroundVoice() {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            request();
+            requestRuntimePermissions();
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(this)) {
+            waitingOverlayPermission = true;
+            requestOverlayPermission();
             return;
         }
         Intent i = new Intent(this, WakeWordService.class);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(i); else startService(i);
-        status.setText("Background listening ON. अब Jarvis app में वापस आने की जरूरत नहीं होनी चाहिए।");
+        status.setText("Jarvis ON. छोटा J bubble दिखेगा; अब Home/दूसरे apps में भी command सुनने की कोशिश करेगा।");
     }
 
     void stopBackgroundVoice() {
         stopService(new Intent(this, WakeWordService.class));
-        status.setText("Background listening OFF.");
+        status.setText("Jarvis OFF.");
+    }
+
+    protected void onResume() {
+        super.onResume();
+        if (waitingOverlayPermission && (Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(this))) {
+            waitingOverlayPermission = false;
+            startBackgroundVoice();
+        }
     }
 
     void speakOnce() {
