@@ -32,7 +32,7 @@ public class MainActivity extends Activity {
         x.setPadding(28, 28, 28, 28);
 
         TextView title = new TextView(this);
-        title.setText("Jarvis Phone v2.0.6\nMULTI-WORK BUILD");
+        title.setText("Jarvis Phone v2.0.7\nSAFE MULTI-WORK BUILD");
         title.setTextSize(23);
         x.addView(title);
 
@@ -49,10 +49,6 @@ public class MainActivity extends Activity {
         add(x, "START LISTENING", this::startBackgroundVoice);
         add(x, "STOP LISTENING", this::stopBackgroundVoice);
         add(x, "BACKGROUND APP CONTROL PERMISSION", this::requestOverlayPermission);
-        add(x, "SCREEN CONTROL / MULTI-WORK PERMISSION", () -> {
-            startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
-            status.setText("Accessibility में Jarvis Phone को ON करो। इससे type, tap, search और multi-work चलेगा।");
-        });
         add(x, "SPEAK ONCE (Google fallback)", this::speakOnce);
 
         cmd = new EditText(this);
@@ -60,7 +56,6 @@ public class MainActivity extends Activity {
         x.addView(cmd);
         add(x, "RUN COMMAND", () -> new CommandEngine(this).execute(cmd.getText().toString(), this::say));
 
-        add(x, "NOTIFICATION ACCESS", () -> startActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")));
         add(x, "CLEAR LOCAL MEMORY", () -> {
             vault.clear();
             wake.setText("Jarvis");
@@ -68,7 +63,7 @@ public class MainActivity extends Activity {
         });
 
         status = new TextView(this);
-        status.setText("Ready. START LISTENING ON करो। Multi-work के लिए SCREEN CONTROL permission भी ON करो।");
+        status.setText("Ready. Accessibility नहीं चाहिए। पहली बार Background App Control Allow करके START LISTENING दबाओ।");
         x.addView(status);
 
         ScrollView s = new ScrollView(this);
@@ -119,7 +114,7 @@ public class MainActivity extends Activity {
         }
         Intent i = new Intent(this, WakeWordService.class);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(i); else startService(i);
-        status.setText("Jarvis ON. Home/दूसरे apps में भी voice सुनने की कोशिश करेगा। Multi-work के लिए Screen Control ON होना चाहिए।");
+        status.setText("Jarvis ON. अब Home/दूसरे apps में voice commands सुनने की कोशिश करेगा।");
     }
 
     void stopBackgroundVoice() {
