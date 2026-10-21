@@ -6,19 +6,16 @@ import android.content.*;
 import android.content.pm.PackageManager;
 import android.os.*;
 import android.provider.Settings;
-import android.speech.*;
+import android.speech.RecognizerIntent;
 import android.speech.tts.TextToSpeech;
 import android.widget.*;
 import java.util.*;
 
-public class MainActivity extends Activity implements RecognitionListener {
+public class MainActivity extends Activity {
     LocalVault vault;
     EditText wake, cmd;
     TextView status;
     TextToSpeech tts;
-    SpeechRecognizer recognizer;
-    Intent recognizerIntent;
-    boolean voiceBusy = false;
     static final int SPEECH = 90;
 
     public void onCreate(Bundle b) {
@@ -33,7 +30,7 @@ public class MainActivity extends Activity implements RecognitionListener {
         x.setPadding(28, 28, 28, 28);
 
         TextView title = new TextView(this);
-        title.setText("Jarvis Phone v2.0.3\nVOICE-FIRST TEST BUILD");
+        title.setText("Jarvis Phone v2.0.4\nBACKGROUND VOICE TEST BUILD");
         title.setTextSize(23);
         x.addView(title);
 
@@ -42,13 +39,13 @@ public class MainActivity extends Activity implements RecognitionListener {
         wake.setText(vault.get("wake_name", "Jarvis"));
         x.addView(wake);
 
-        add(x, "Save name", () -> {
+        add(x, "SAVE NAME", () -> {
             vault.put("wake_name", wake.getText().toString().trim());
             say("नाम सेव हो गया।");
         });
 
-        add(x, "START LISTENING", this::startVoiceOnce);
-        add(x, "STOP LISTENING", this::stopVoice);
+        add(x, "START LISTENING", this::startBackgroundVoice);
+        add(x, "STOP LISTENING", this::stopBackgroundVoice);
         add(x, "SPEAK ONCE (Google fallback)", this::speakOnce);
 
         cmd = new EditText(this);
@@ -65,14 +62,13 @@ public class MainActivity extends Activity implements RecognitionListener {
         });
 
         status = new TextView(this);
-        status.setText("Ready. START LISTENING दबाओ और बोलो: Jarvis YouTube खोलो");
+        status.setText("Ready. START LISTENING एक बार दबाओ; फिर app minimize होने पर भी Jarvis सुनने की कोशिश करेगा।");
         x.addView(status);
 
         ScrollView s = new ScrollView(this);
         s.addView(x);
         setContentView(s);
         request();
-        prepareRecognizer();
     }
 
     void add(LinearLayout x, String n, Runnable r) {
@@ -93,56 +89,19 @@ public class MainActivity extends Activity implements RecognitionListener {
         if (!p.isEmpty()) requestPermissions(p.toArray(new String[0]), 33);
     }
 
-    void prepareRecognizer() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            if (status != null) status.setText("Phone speech recognizer available नहीं है।");
-            return;
-        }
-        destroyRecognizer();
-        recognizer = SpeechRecognizer.createSpeechRecognizer(this);
-        recognizer.setRecognitionListener(this);
-        recognizerIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN");
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
-    }
-
-    void startVoiceOnce() {
+    void startBackgroundVoice() {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             request();
             return;
         }
-        stopService(new Intent(this, WakeWordService.class));
-        if (recognizer == null) prepareRecognizer();
-        if (recognizer == null) return;
-        try {
-            if (voiceBusy) recognizer.cancel();
-            voiceBusy = true;
-            status.setText("Listening... बोलो: Jarvis YouTube खोलो");
-            recognizer.startListening(recognizerIntent);
-        } catch (Exception e) {
-            voiceBusy = false;
-            prepareRecognizer();
-            status.setText("Voice start नहीं हुआ। फिर START LISTENING दबाओ।");
-        }
+        Intent i = new Intent(this, WakeWordService.class);
+        if (Build.VERSION.SDK_INT >= 26) startForegroundService(i); else startService(i);
+        status.setText("Background listening ON. अब Jarvis app में वापस आने की जरूरत नहीं होनी चाहिए।");
     }
 
-    void stopVoice() {
-        voiceBusy = false;
+    void stopBackgroundVoice() {
         stopService(new Intent(this, WakeWordService.class));
-        if (recognizer != null) {
-            try { recognizer.cancel(); } catch (Exception ignored) {}
-        }
-        status.setText("Voice listener बंद।");
-    }
-
-    void executeHeard(String heard) {
-        if (heard == null || heard.trim().isEmpty()) return;
-        String text = heard.trim();
-        cmd.setText(text);
-        status.setText("सुना: " + text);
-        new CommandEngine(this).execute(text, this::say);
+        status.setText("Background listening OFF.");
     }
 
     void speakOnce() {
@@ -158,41 +117,16 @@ public class MainActivity extends Activity implements RecognitionListener {
 
     protected void onActivityResult(int r, int c, Intent d) {
         super.onActivityResult(r, c, d);
-        if (r == SPEECH && c != RESULT_OK) {
-            status.setText("Google voice पहचान नहीं हुई।");
-        }
         if (r == SPEECH && c == RESULT_OK && d != null) {
             ArrayList<String> a = d.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
-            if (a != null && !a.isEmpty()) executeHeard(a.get(0));
+            if (a != null && !a.isEmpty()) {
+                cmd.setText(a.get(0));
+                new CommandEngine(this).execute(a.get(0), this::say);
+            }
+        } else if (r == SPEECH) {
+            status.setText("Google voice पहचान नहीं हुई।");
         }
     }
-
-    public void onReadyForSpeech(Bundle b) { status.setText("Listening... अब बोलो"); }
-    public void onBeginningOfSpeech() { status.setText("सुन रहा हूँ..."); }
-    public void onRmsChanged(float f) {}
-    public void onBufferReceived(byte[] b) {}
-    public void onEndOfSpeech() { status.setText("समझ रहा हूँ..."); }
-
-    public void onResults(Bundle b) {
-        voiceBusy = false;
-        ArrayList<String> a = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-        if (a != null && !a.isEmpty()) executeHeard(a.get(0));
-        else status.setText("कुछ सुनाई नहीं दिया। फिर START LISTENING दबाओ।");
-    }
-
-    public void onPartialResults(Bundle b) {
-        ArrayList<String> a = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-        if (a != null && !a.isEmpty()) status.setText("सुन रहा हूँ: " + a.get(0));
-    }
-
-    public void onError(int error) {
-        voiceBusy = false;
-        status.setText("Voice नहीं पकड़ पाया (" + error + "). फिर START LISTENING दबाओ।");
-        if (error == SpeechRecognizer.ERROR_CLIENT || error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY)
-            prepareRecognizer();
-    }
-
-    public void onEvent(int eventType, Bundle params) {}
 
     void say(String s) {
         runOnUiThread(() -> {
@@ -201,16 +135,7 @@ public class MainActivity extends Activity implements RecognitionListener {
         });
     }
 
-    void destroyRecognizer() {
-        if (recognizer != null) {
-            try { recognizer.cancel(); } catch (Exception ignored) {}
-            try { recognizer.destroy(); } catch (Exception ignored) {}
-            recognizer = null;
-        }
-    }
-
     protected void onDestroy() {
-        destroyRecognizer();
         if (tts != null) tts.shutdown();
         super.onDestroy();
     }
