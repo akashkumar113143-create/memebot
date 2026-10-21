@@ -5,7 +5,7 @@ import android.content.*;
 import android.content.pm.*;
 import android.media.AudioManager;
 import android.net.Uri;
-import android.os.Build;
+import android.os.*;
 import android.provider.Settings;
 import android.view.KeyEvent;
 import java.util.*;
@@ -15,6 +15,7 @@ public class CommandEngine {
     public interface Reply { void say(String s); }
     final Context c;
     final LocalVault v;
+    final Handler handler = new Handler(Looper.getMainLooper());
 
     public CommandEngine(Context c) {
         this.c = c;
@@ -22,14 +23,200 @@ public class CommandEngine {
     }
 
     public void execute(String q, Reply r) {
-        if (q == null) return;
-        String l = q.toLowerCase(Locale.ROOT).trim();
+        if (q == null || q.trim().isEmpty()) return;
+        String cleaned = stripWake(q.trim());
+        String l = cleaned.toLowerCase(Locale.ROOT);
+
+        if (isYoutubeWorkflow(l)) {
+            runYoutubeWorkflow(cleaned, l, r);
+            return;
+        }
+
+        List<String> steps = splitMulti(cleaned);
+        if (steps.size() > 1) {
+            runSequence(steps, r);
+            return;
+        }
+
+        executeSingle(cleaned, r);
+    }
+
+    String stripWake(String q) {
         String n = v.get("wake_name", "Jarvis");
-        l = l.replaceFirst("(?i)^" + Pattern.quote(n) + "[ ,:-]*", "").trim();
+        return q.replaceFirst("(?i)^" + Pattern.quote(n) + "[ ,:-]*", "").trim();
+    }
+
+    List<String> splitMulti(String q) {
+        String s = q.replace(" और फिर ", " || ")
+                .replace(" फिर ", " || ")
+                .replaceAll("(?i)\\s+then\\s+", " || ")
+                .replace(" और ", " || ");
+        String[] raw = s.split("\\|\\|");
+        ArrayList<String> out = new ArrayList<>();
+        for (String x : raw) if (!x.trim().isEmpty()) out.add(x.trim());
+        return out;
+    }
+
+    void runSequence(List<String> steps, Reply r) {
+        JarvisAccessibilityService svc = JarvisAccessibilityService.get();
+        if (svc == null) {
+            r.say("Multi-work के लिए Jarvis की Screen Control permission ON करो।");
+            return;
+        }
+        long delay = 0;
+        for (int i = 0; i < steps.size(); i++) {
+            final String step = steps.get(i);
+            final boolean last = i == steps.size() - 1;
+            handler.postDelayed(() -> executeSingle(step, last ? r : s -> {}), delay);
+            delay += 2200;
+        }
+        if (steps.size() > 1) r.say("ठीक है, सारे काम एक-एक करके कर रहा हूँ।");
+    }
+
+    boolean isYoutubeWorkflow(String l) {
+        if (!(l.contains("youtube") || l.contains("यूट्यूब"))) return false;
+        return l.contains("song") || l.contains("गाना") || l.contains("play") ||
+                l.contains("बजाओ") || l.contains("लगाओ") || l.contains("search") ||
+                l.contains("खोज") || l.contains("like") || l.contains("लाइक") ||
+                l.contains("watch later") || l.contains("watch list") || l.contains("playlist") || l.contains("सेव");
+    }
+
+    void runYoutubeWorkflow(String q, String l, Reply r) {
+        if (!canLaunchFromHere()) {
+            r.say(backgroundPermissionReply());
+            return;
+        }
+
+        String query = extractYoutubeQuery(q);
+        boolean wantsLike = l.contains("like") || l.contains("लाइक") || l.contains("पसंद");
+        boolean wantsSave = l.contains("watch later") || l.contains("watch list") || l.contains("playlist") || l.contains("सेव") || l.contains("save");
+
+        if (query.isEmpty()) {
+            launch("com.google.android.youtube", "https://www.youtube.com");
+            r.say("YouTube खोल रहा हूँ।");
+            return;
+        }
+
+        boolean opened = openYoutubeSearch(query);
+        if (!opened) {
+            r.say("YouTube search नहीं खुल पाया।");
+            return;
+        }
+
+        JarvisAccessibilityService svc = JarvisAccessibilityService.get();
+        if (svc == null) {
+            r.say("YouTube खुल गया। Search result play, Like और Save के लिए Screen Control permission ON करो।");
+            return;
+        }
+
+        handler.postDelayed(() -> svc.tapBestMatch(query), 2800);
+
+        if (wantsLike) {
+            handler.postDelayed(() -> svc.tapAny("Like", "like this video", "लाइक", "पसंद है"), 6500);
+        }
+        if (wantsSave) {
+            handler.postDelayed(() -> {
+                if (svc.tapAny("Save", "Save to playlist", "सेव")) {
+                    handler.postDelayed(() -> svc.tapAny("Watch later", "बाद में देखें", "Watch Later"), 1200);
+                }
+            }, wantsLike ? 8200 : 6500);
+        }
+
+        r.say("YouTube पर " + query + " ढूँढकर चला रहा हूँ" + (wantsLike ? ", Like भी करूँगा" : "") + (wantsSave ? ", और Watch Later में Save करूँगा" : "") + "।");
+    }
+
+    String extractYoutubeQuery(String q) {
+        String s = stripWake(q);
+        int cut = indexOfAny(s.toLowerCase(Locale.ROOT), " और ", " फिर ", " then ", ", फिर");
+        if (cut > 0) s = s.substring(0, cut);
+        s = s.replaceAll("(?i)youtube|यूट्यूब", " ");
+        s = s.replaceAll("(?i)\\b(open|play|search|start)\\b", " ");
+        s = s.replace("खोलो", " ").replace("खोल", " ").replace("चालू करो", " ");
+        s = s.replace("गाना बजाओ", " ").replace("गाना चलाओ", " ").replace("गाना लगाओ", " ");
+        s = s.replace("बजाओ", " ").replace("चलाओ", " ").replace("लगाओ", " ").replace("खोजो", " ");
+        s = s.replaceAll("\\s+", " ").trim();
+        return s;
+    }
+
+    int indexOfAny(String s, String... needles) {
+        int best = -1;
+        for (String n : needles) {
+            int i = s.indexOf(n);
+            if (i >= 0 && (best < 0 || i < best)) best = i;
+        }
+        return best;
+    }
+
+    boolean openYoutubeSearch(String query) {
+        Intent i = new Intent(Intent.ACTION_VIEW,
+                Uri.parse("https://www.youtube.com/results?search_query=" + Uri.encode(query)));
+        i.setPackage("com.google.android.youtube");
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+        try {
+            c.startActivity(i);
+            return true;
+        } catch (Exception e) {
+            try {
+                Intent web = new Intent(Intent.ACTION_VIEW,
+                        Uri.parse("https://www.youtube.com/results?search_query=" + Uri.encode(query)));
+                web.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                c.startActivity(web);
+                return true;
+            } catch (Exception ignored) {
+                return false;
+            }
+        }
+    }
+
+    void executeSingle(String q, Reply r) {
+        String l = stripWake(q).toLowerCase(Locale.ROOT).trim();
+        JarvisAccessibilityService svc = JarvisAccessibilityService.get();
+
+        if (l.startsWith("type ") || l.startsWith("लिखो ") || l.startsWith("टाइप ")) {
+            String text = q.substring(q.indexOf(' ') + 1).trim();
+            if (svc == null) r.say("Type करने के लिए Screen Control permission ON करो।");
+            else r.say(svc.typeText(text) ? "लिख दिया।" : "यहाँ typing box नहीं मिला।");
+            return;
+        }
+
+        if (l.startsWith("search ") || l.startsWith("खोजो ") || l.startsWith("सर्च ")) {
+            String text = q.substring(q.indexOf(' ') + 1).trim();
+            if (svc == null) {
+                r.say("Search के लिए Screen Control permission ON करो।");
+                return;
+            }
+            boolean typed = svc.typeText(text);
+            if (typed) {
+                handler.postDelayed(() -> {
+                    if (!svc.pressEnter()) svc.tapAny("Search", "खोजें", "Go");
+                }, 350);
+                r.say("Search कर रहा हूँ।");
+            } else r.say("Search box नहीं मिला।");
+            return;
+        }
+
+        if (l.startsWith("tap ") || l.startsWith("दबाओ ") || l.startsWith("क्लिक ")) {
+            String text = q.substring(q.indexOf(' ') + 1).trim();
+            if (svc == null) r.say("Tap करने के लिए Screen Control permission ON करो।");
+            else r.say(svc.tapText(text) ? "दबा दिया।" : "वो button/text नहीं मिला।");
+            return;
+        }
 
         if (isCloseCommand(l)) {
-            if (goHome()) r.say("ठीक है, Home screen पर आ गया।");
-            else r.say("Background App Control permission Allow करो, तभी दूसरे app से बाहर आ पाऊँगा।");
+            boolean ok = svc != null ? svc.home() : goHome();
+            r.say(ok ? "ठीक है, Home screen पर आ गया।" : "App से बाहर आने के लिए Screen Control permission ON करो।");
+            return;
+        }
+
+        if (l.equals("back") || l.contains("पीछे जाओ")) {
+            boolean ok = svc != null ? svc.back() : false;
+            r.say(ok ? "पीछे आ गया।" : "Back के लिए Screen Control permission ON करो।");
+            return;
+        }
+
+        if (l.equals("home") || l.contains("होम जाओ")) {
+            boolean ok = svc != null ? svc.home() : goHome();
+            r.say(ok ? "Home।" : backgroundPermissionReply());
             return;
         }
 
@@ -87,10 +274,6 @@ public class CommandEngine {
             r.say(open(Settings.ACTION_WIFI_SETTINGS) ? "Wi-Fi settings खोल दी।" : backgroundPermissionReply());
             return;
         }
-        if (l.equals("home") || l.contains("होम जाओ")) {
-            r.say(goHome() ? "Home।" : backgroundPermissionReply());
-            return;
-        }
         if (l.contains("गाना चल") || l.equals("play")) {
             media(KeyEvent.KEYCODE_MEDIA_PLAY);
             r.say("Play।");
@@ -132,7 +315,7 @@ public class CommandEngine {
     }
 
     String backgroundPermissionReply() {
-        return "Background App Control permission चाहिए। Jarvis app में जाकर permission Allow करो।";
+        return "Background App Control permission चाहिए। Jarvis app में permission Allow करो।";
     }
 
     boolean canLaunchFromHere() {
@@ -232,7 +415,6 @@ public class CommandEngine {
     }
 
     boolean goHome() {
-        if (!canLaunchFromHere()) return false;
         Intent i = new Intent(Intent.ACTION_MAIN);
         i.addCategory(Intent.CATEGORY_HOME);
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
